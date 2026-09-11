@@ -82,6 +82,14 @@ app.use(
  *   - Deployment verification
  */
 
+app.get("/", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "sih26143-node",
+    message: "SIH26143 backend is running"
+  });
+});
+
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "ok",
