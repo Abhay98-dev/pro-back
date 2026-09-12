@@ -16,7 +16,6 @@ mmsi,timestamp,lat,lon,speed_knots,heading_deg,vessel_type,vessel_name
 419007777,2024-03-15T07:05:00Z,18.00,72.10,6.1,44,Cargo Vessel,Cargo Demo
 419004444,2024-03-15T05:45:00Z,18.90,73.20,15.0,270,Tanker,MV Far Away
 419004444,2024-03-15T05:15:00Z,18.90,73.07,15.1,269,Tanker,MV Far Away
-419004444,2024-03-15T04:45:00Z,18.90,72.94,15.0,270,Tanker,MV Far Awaymmsi,timestamp,lat,lon,speed_knots,heading_deg,vessel_type,vessel_name
 419001234,2024-03-15T06:15:00Z,18.25,72.45,14.2,90,Tanker,MV Arabian Star
 419001234,2024-03-15T05:45:00Z,18.24,72.39,14.0,88,Tanker,MV Arabian Star
 419001234,2024-03-15T05:15:00Z,18.23,72.32,13.8,87,Tanker,MV Arabian Star
