@@ -14,7 +14,8 @@ function clamp01(value) {
 
 function hoursBetween(start, end) {
   return (
-    (new Date(end).getTime() - new Date(start).getTime()) /
+    (new Date(end).getTime() -
+      new Date(start).getTime()) /
     (1000 * 60 * 60)
   );
 }
@@ -26,7 +27,9 @@ export function getLatestPings(records) {
   const latest = new Map();
 
   for (const record of records) {
-    if (!record?.mmsi || !record?.timestamp) continue;
+    if (!record?.mmsi || !record?.timestamp) {
+      continue;
+    }
 
     const existing = latest.get(record.mmsi);
 
@@ -43,16 +46,18 @@ export function getLatestPings(records) {
 }
 
 /*
- * IMPORTANT:
+ * Find the last AIS ping before the estimated
+ * spill-origin window.
  *
- * Find the last AIS ping that occurred BEFORE
- * the estimated spill-origin window.
- *
- * We do NOT restrict this to the requested
+ * We intentionally DO NOT restrict AIS by the
  * satellite detection bounding box.
  */
-export function getLastPingBeforeOrigin(records, originTimeWindow) {
-  const originStart = new Date(originTimeWindow.start);
+export function getLastPingBeforeOrigin(
+  records,
+  originTimeWindow
+) {
+  const originStart =
+    new Date(originTimeWindow.start);
 
   const vesselPings = new Map();
 
@@ -66,23 +71,33 @@ export function getLastPingBeforeOrigin(records, originTimeWindow) {
       continue;
     }
 
-    const timestamp = new Date(record.timestamp);
+    const timestamp =
+      new Date(record.timestamp);
 
-    if (Number.isNaN(timestamp.getTime())) continue;
+    if (Number.isNaN(timestamp.getTime())) {
+      continue;
+    }
 
     /*
      * Only consider AIS transmissions before
-     * the estimated origin time.
+     * the estimated origin window begins.
      */
-    if (timestamp >= originStart) continue;
+    if (timestamp >= originStart) {
+      continue;
+    }
 
-    const existing = vesselPings.get(record.mmsi);
+    const existing =
+      vesselPings.get(record.mmsi);
 
     if (
       !existing ||
-      timestamp > new Date(existing.timestamp)
+      timestamp >
+        new Date(existing.timestamp)
     ) {
-      vesselPings.set(record.mmsi, record);
+      vesselPings.set(
+        record.mmsi,
+        record
+      );
     }
   }
 
@@ -92,38 +107,139 @@ export function getLastPingBeforeOrigin(records, originTimeWindow) {
 /*
  * Get centroid of origin probability area.
  */
-export function getOriginCentroid(originProbabilityArea) {
+export function getOriginCentroid(
+  originProbabilityArea
+) {
   const feature = {
     type: "Feature",
     properties: {},
     geometry: originProbabilityArea
   };
 
-  const result = centroid(feature);
+  const result =
+    centroid(feature);
 
   return {
-    lon: result.geometry.coordinates[0],
-    lat: result.geometry.coordinates[1]
+    lon:
+      result.geometry.coordinates[0],
+
+    lat:
+      result.geometry.coordinates[1]
+  };
+}
+
+/*
+ * Check whether a vessel's dark period overlaps
+ * the estimated spill-origin time window.
+ *
+ * Example:
+ *
+ * Last AIS ping:       06:30
+ * Dark requirement:    2–3 hours
+ *
+ * Dark interval:
+ *   08:30 → 09:30
+ *
+ * Origin window:
+ *   07:30 → 10:30
+ *
+ * These intervals overlap, so the vessel is a
+ * valid temporal candidate.
+ */
+function getDarkWindowOverlap(
+  lastPing,
+  originTimeWindow
+) {
+  const lastPingTime =
+    new Date(lastPing);
+
+  const originStart =
+    new Date(originTimeWindow.start);
+
+  const originEnd =
+    new Date(originTimeWindow.end);
+
+  /*
+   * A vessel is considered dark for the
+   * 2–3 hour interval following its last AIS ping.
+   */
+  const darkWindowStart =
+    new Date(
+      lastPingTime.getTime() +
+        2 * 60 * 60 * 1000
+    );
+
+  const darkWindowEnd =
+    new Date(
+      lastPingTime.getTime() +
+        3 * 60 * 60 * 1000
+    );
+
+  /*
+   * Check whether:
+   *
+   * [dark start, dark end]
+   *
+   * overlaps:
+   *
+   * [origin start, origin end]
+   */
+  const overlapStart =
+    Math.max(
+      darkWindowStart.getTime(),
+      originStart.getTime()
+    );
+
+  const overlapEnd =
+    Math.min(
+      darkWindowEnd.getTime(),
+      originEnd.getTime()
+    );
+
+  if (overlapStart > overlapEnd) {
+    return null;
+  }
+
+  /*
+   * Use the midpoint of the overlapping interval
+   * as the representative origin time.
+   */
+  const representativeTime =
+    new Date(
+      (overlapStart + overlapEnd) / 2
+    );
+
+  const darkHours =
+    hoursBetween(
+      lastPingTime,
+      representativeTime
+    );
+
+  return {
+    darkWindowStart,
+    darkWindowEnd,
+    representativeTime,
+    darkHours
   };
 }
 
 /*
  * DARK VESSEL DETECTION
  *
- * A vessel is considered a candidate when:
+ * Candidate requirements:
  *
- * 1. Its last AIS transmission occurred before
- *    the estimated origin window.
+ * 1. Last AIS ping occurred before origin window.
  *
- * 2. It went dark approximately 2–3 hours before
- *    the origin window.
+ * 2. The vessel's 2–3 hour dark interval overlaps
+ *    the estimated spill-origin time window.
  *
- * 3. Its last known position is reasonably close
- *    to the estimated origin.
+ * 3. Last known position is within the allowed
+ *    distance from the estimated origin centroid.
  *
  * IMPORTANT:
- * We intentionally do NOT use the satellite detection
- * bounding box here.
+ *
+ * We DO NOT filter AIS by the satellite detection
+ * bounding box.
  */
 export function findDarkVessels(
   records,
@@ -131,29 +247,37 @@ export function findDarkVessels(
   originTimeWindow,
   radiusKm = 75
 ) {
-  if (!Array.isArray(records) || records.length === 0) {
-    console.warn("[AIS] No AIS records available.");
+  if (
+    !Array.isArray(records) ||
+    records.length === 0
+  ) {
+    console.warn(
+      "[AIS] No AIS records available."
+    );
+
     return [];
   }
 
   if (
     !originProbabilityArea ||
-    !originTimeWindow?.start
+    !originTimeWindow?.start ||
+    !originTimeWindow?.end
   ) {
     console.warn(
       "[AIS] Missing origin probability area or origin time window."
     );
+
     return [];
   }
 
   const originCentroid =
-    getOriginCentroid(originProbabilityArea);
+    getOriginCentroid(
+      originProbabilityArea
+    );
 
   /*
-   * Use the latest ping BEFORE the estimated origin.
-   *
-   * This is much better than blindly using the latest
-   * ping in the entire CSV.
+   * Get the last AIS transmission for every
+   * vessel before the origin window.
    */
   const latestBeforeOrigin =
     getLastPingBeforeOrigin(
@@ -165,21 +289,43 @@ export function findDarkVessels(
     `[AIS] Unique vessels before origin: ${latestBeforeOrigin.length}`
   );
 
+  console.log(
+    `[AIS] Origin window: ${originTimeWindow.start} → ${originTimeWindow.end}`
+  );
+
   const candidates = [];
 
-  for (const vessel of latestBeforeOrigin) {
+  for (
+    const vessel of latestBeforeOrigin
+  ) {
     const lastPing =
       new Date(vessel.timestamp);
 
-    const darkHours =
-      hoursBetween(
-        lastPing,
-        originTimeWindow.start
+    /*
+     * -----------------------------------------------------
+     * TEMPORAL CHECK
+     * -----------------------------------------------------
+     *
+     * Instead of comparing only with originWindow.start,
+     * determine whether the 2–3 hour dark interval overlaps
+     * ANY part of the origin window.
+     */
+    const darkWindow =
+      getDarkWindowOverlap(
+        vessel.timestamp,
+        originTimeWindow
       );
 
+    /*
+     * Distance from last known AIS position
+     * to estimated origin centroid.
+     */
     const distanceKm =
       distance(
-        [vessel.lon, vessel.lat],
+        [
+          vessel.lon,
+          vessel.lat
+        ],
         [
           originCentroid.lon,
           originCentroid.lat
@@ -190,35 +336,54 @@ export function findDarkVessels(
       );
 
     console.log(
-      `[AIS] ${vessel.mmsi} | ${vessel.vessel_name ?? "Unknown"} | ` +
+      `[AIS] ${vessel.mmsi} | ` +
+      `${vessel.vessel_name ?? "Unknown"} | ` +
       `last=${vessel.timestamp} | ` +
-      `dark=${darkHours.toFixed(2)}h | ` +
       `distance=${distanceKm.toFixed(2)}km`
     );
 
     /*
-     * Dark-window requirement.
+     * -----------------------------------------------------
+     * TEMPORAL REJECTION
+     * -----------------------------------------------------
      */
-    if (darkHours < 2 || darkHours > 3) {
+    if (!darkWindow) {
       console.log(
-        `[AIS] REJECT ${vessel.mmsi}: dark time outside 2–3h`
+        `[AIS] REJECT ${vessel.mmsi}: ` +
+        `2–3h dark interval does not overlap origin window`
       );
+
+      continue;
+    }
+
+    console.log(
+      `[AIS] ${vessel.mmsi} | ` +
+      `dark interval=` +
+      `${darkWindow.darkWindowStart.toISOString()} → ` +
+      `${darkWindow.darkWindowEnd.toISOString()} | ` +
+      `representative dark gap=` +
+      `${darkWindow.darkHours.toFixed(2)}h`
+    );
+
+    /*
+     * -----------------------------------------------------
+     * DISTANCE REJECTION
+     * -----------------------------------------------------
+     */
+    if (distanceKm > radiusKm) {
+      console.log(
+        `[AIS] REJECT ${vessel.mmsi}: ` +
+        `${distanceKm.toFixed(2)}km > ${radiusKm}km`
+      );
+
       continue;
     }
 
     /*
-     * Spatial proximity requirement.
-     *
-     * This is measured against the estimated origin,
-     * NOT the original satellite bounding box.
+     * -----------------------------------------------------
+     * ACCEPT
+     * -----------------------------------------------------
      */
-    if (distanceKm > radiusKm) {
-      console.log(
-        `[AIS] REJECT ${vessel.mmsi}: ${distanceKm.toFixed(2)}km > ${radiusKm}km`
-      );
-      continue;
-    }
-
     console.log(
       `[AIS] ACCEPT ${vessel.mmsi}: dark vessel candidate`
     );
@@ -226,15 +391,31 @@ export function findDarkVessels(
     candidates.push({
       ...vessel,
 
+      /*
+       * Representative dark gap inside the
+       * uncertain origin window.
+       */
       went_dark_hours_ago:
         Number(
-          darkHours.toFixed(2)
+          darkWindow.darkHours.toFixed(2)
         ),
 
       distance_to_origin_km:
         Number(
           distanceKm.toFixed(2)
-        )
+        ),
+
+      /*
+       * Useful for frontend/debugging.
+       */
+      dark_window_start:
+        darkWindow.darkWindowStart.toISOString(),
+
+      dark_window_end:
+        darkWindow.darkWindowEnd.toISOString(),
+
+      representative_origin_time:
+        darkWindow.representativeTime.toISOString()
     });
   }
 
@@ -246,15 +427,19 @@ export function findDarkVessels(
 }
 
 /*
- * Calculate reachable zone using:
+ * Calculate reachable zone.
  *
- * speed uncertainty ±30%
- * heading uncertainty ±35°
+ * Speed uncertainty: ±30%
+ * Heading uncertainty: ±35°
  */
 export function calculateReachableZone(
   vessel,
   originTimeWindow
 ) {
+  /*
+   * Use the beginning of the origin window for
+   * the conservative reachability calculation.
+   */
   const elapsedHours =
     hoursBetween(
       vessel.timestamp,
@@ -297,11 +482,27 @@ export function calculateReachableZone(
   if (maxDistance === 0) {
     return {
       type: "Polygon",
+
       coordinates: [[
-        [vessel.lon, vessel.lat],
-        [vessel.lon + 0.0001, vessel.lat],
-        [vessel.lon, vessel.lat + 0.0001],
-        [vessel.lon, vessel.lat]
+        [
+          vessel.lon,
+          vessel.lat
+        ],
+
+        [
+          vessel.lon + 0.0001,
+          vessel.lat
+        ],
+
+        [
+          vessel.lon,
+          vessel.lat + 0.0001
+        ],
+
+        [
+          vessel.lon,
+          vessel.lat
+        ]
       ]]
     };
   }
@@ -315,9 +516,15 @@ export function calculateReachableZone(
   ) {
     const point =
       destination(
-        [vessel.lon, vessel.lat],
+        [
+          vessel.lon,
+          vessel.lat
+        ],
+
         maxDistance,
+
         angle,
+
         {
           units: "kilometers"
         }
@@ -337,9 +544,15 @@ export function calculateReachableZone(
   ) {
     const point =
       destination(
-        [vessel.lon, vessel.lat],
+        [
+          vessel.lon,
+          vessel.lat
+        ],
+
         minDistance,
+
         angle,
+
         {
           units: "kilometers"
         }
@@ -351,10 +564,19 @@ export function calculateReachableZone(
   }
 
   const coordinates = [
-    [vessel.lon, vessel.lat],
+    [
+      vessel.lon,
+      vessel.lat
+    ],
+
     ...outerPoints,
+
     ...innerPoints,
-    [vessel.lon, vessel.lat]
+
+    [
+      vessel.lon,
+      vessel.lat
+    ]
   ];
 
   return {
@@ -366,8 +588,12 @@ export function calculateReachableZone(
 /*
  * KINEMATIC SCORE
  *
- * overlap between reachable zone
- * and origin probability area.
+ * Score =
+ *
+ * intersection area /
+ * origin probability area
+ *
+ * Range: 0–1
  */
 export function calculateKinematicScore(
   reachableZone,
@@ -387,7 +613,8 @@ export function calculateKinematicScore(
     const originFeature = {
       type: "Feature",
       properties: {},
-      geometry: originProbabilityArea
+      geometry:
+        originProbabilityArea
     };
 
     const originArea =
@@ -400,6 +627,7 @@ export function calculateKinematicScore(
     const overlap =
       intersect({
         type: "FeatureCollection",
+
         features: [
           reachableFeature,
           originFeature
@@ -436,7 +664,10 @@ export function calculateProximityScore(
 ) {
   const distanceKm =
     distance(
-      [vessel.lon, vessel.lat],
+      [
+        vessel.lon,
+        vessel.lat
+      ],
       [
         originCentroid.lon,
         originCentroid.lat
@@ -500,9 +731,9 @@ export function calculateSizeMatchScore(
  *
  * REQUIRED SIH FORMULA:
  *
- * 0.4 Kinematic
- * 0.3 Proximity
- * 0.3 Size
+ * 0.4 × Kinematic
+ * 0.3 × Proximity
+ * 0.3 × Size/Type
  */
 export function rankSuspects(
   darkVessels,
@@ -513,6 +744,7 @@ export function rankSuspects(
 ) {
   return darkVessels
     .map(vessel => {
+
       const reachableZone =
         calculateReachableZone(
           vessel,
@@ -537,6 +769,9 @@ export function rankSuspects(
           expectedVesselType
         );
 
+      /*
+       * DO NOT CHANGE THIS FORMULA.
+       */
       const finalScore =
         0.4 * kinematicScore +
         0.3 * proximity.score +
@@ -553,8 +788,11 @@ export function rankSuspects(
           vessel.vessel_type,
 
         last_known_position: {
-          lon: vessel.lon,
-          lat: vessel.lat
+          lon:
+            vessel.lon,
+
+          lat:
+            vessel.lat
         },
 
         last_known_timestamp:
@@ -591,6 +829,7 @@ export function rankSuspects(
           )
       };
     })
+
     .sort(
       (a, b) =>
         b.final_score -
